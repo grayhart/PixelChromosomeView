@@ -1,12 +1,11 @@
-#!/usr/bin/env python3
 """
-    Copyright 2021 by Neil Millikin
-    contact: neil.millikin@gmail.com
+    Copyright 2021 by Neil Millikin and Graham Hart
+    contact: neil.millikin@gmail.com graham@the-harts.co.uk
     license: GPLv3
 
     This program graphically displays DNA match data for three or more siblings
 
-    The comparison of three or more siblings' DNA data has been shoen to allow
+    The comparison of three or more siblings' DNA data has been shown to allow
     derivation of the maternal and paternal grandparents for each sibling
     chromosome pair.
 
@@ -30,20 +29,29 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
 
-__author__ = "Neil Millikin"
-__maintainer__ = "Neil Millikin"
-__contact__ = "neil.millikin@gmail.com"
-__email__ = "neil.millikin@gmail.com"
-__copyright__ = "Copyright 2021, Neil Millikin"
-__date__ = "2021/01/01"
-__license__ = "GPLv3"
-__version__ = "1.0.1"
-
+""" 
+    This version of the application has the following differences 
+    from the early version of Neil's application:
+        Has only been written for Ancestry DNA raw data files
+        Has an option to remove Inserts Deletes and No Calls
+        Uses Pandas Dataframes rather than Dictionaries for most of the work
+        Creates a graphic line with the colour segments of the matches
+            Red - No match
+            Yellow - Half match (HIR)
+            Green - Full match (FIR)
+        Has options to allow configuration of limits for choosing red and green
+            How many red or green allele matches constitute a valid segment
+            What distance is allowed before a segment is considered to be ended
+        Everything is set to Yellow and then Reds are applied and then Greens  
+        
+"""
 import csv
 import os
 import sys
 import inspect
 import pprint
+import pandas as pd
+import numpy as np
 
 from itertools import islice
 from collections import OrderedDict
@@ -53,25 +61,13 @@ from PIL import Image, ImageDraw, ImageFont
 
 from pixel_config import *
 
-VERBOSITY = 2
-
-this_dir = os.path.dirname(os.path.abspath(inspect.stack()[0][1]))
-font_library_path = os.path.join(this_dir, "fonts")
-
-helpful_debugging_utility_usages = """
-
-       #  pretty print functions
-       pp_2(str(inspect.stack()[0][2]), "Print something on onee line", here)
-
-       # line print functions
-       lp_2(str(inspect.stack()[0][2]), "print data structure, str(here))
-
-   """
 pp = pprint.PrettyPrinter(indent=4)
+
 
 def lp_2(line_no, name, value):
     if VERBOSITY > 1:
         print("{0}_{1} = {2}\n".format(line_no, name, value))
+
 
 def lp_3(line_no, name, value):
     if VERBOSITY > 2:
@@ -84,24 +80,108 @@ def pp_2(line_no, description, data_structure):
         pp.pprint(data_structure)
         print("")
 
+
 def pp_3(line_no, description, data_structure):
     if VERBOSITY > 2:
         print("\n{0} -- {1} ==>".format(line_no, description))
         pp.pprint(data_structure)
         print("")
 
-def take(n, iterable):
-    "Return first n items of the iterable as a list"
-    return list(islice(iterable, n))
 
+# Read in all the raw data files
+# Filter by the chromosome we want
+# Remove unwanted values
+# Only keep common values across the kits
+def get_chromsome_dataframe_for_matches(
+        all_matches_list):
+    this_dir = os.path.dirname(os.path.realpath('__file__'))
+    data_dir_name = DATA_FILE_DIRECTORY
+    data_file_dir = os.path.join(this_dir, "{0}".format(data_dir_name))
+    source_data_file_names = os.listdir(data_file_dir)
+
+    raw_file_names = [f for f in source_data_file_names if 'raw' in f]
+
+    chr_df = pd.DataFrame()
+    name_arry = []
+    for known_relative in all_matches_list:
+        try:
+            kr_raw_file_name = [rfn for rfn in raw_file_names
+                                if known_relative in rfn
+                                and rfn.split('.')[-1] == 'txt'][0]
+
+            lp_2(str(inspect.stack()[0][2]), "Reading kr_raw_file_name raw data",
+                 str(kr_raw_file_name))
+
+        except IndexError as e:
+            lp_2(str(inspect.stack()[0][2]),
+                 "no such file found for {0}".format(known_relative), str(e))
+            sys.exit()
+
+        this_kr_raw_file = os.path.join(data_file_dir, kr_raw_file_name)
+
+        # 
+        this_df = pd.read_csv(this_kr_raw_file,
+                              sep='\t',
+                              skip_blank_lines=True,
+                              comment='#',
+                              header=0,
+                              names=['rsid', 'chromosome', 'position',
+                                     "{0}-allele1".format(known_relative),
+                                     "{0}-allele2".format(known_relative)])
+
+        # Push the columns onto an array so we can remove unique lines later
+        name_arry.append("{0}-allele1".format(known_relative))
+        name_arry.append("{0}-allele2".format(known_relative))        
+
+        #  Filter out anything except the chromosome we are interested in
+        this_df = this_df[this_df['chromosome'] == CHROMOSOME_TO_RENDER]
+
+        # Remove any Inserts or Deletes
+        # TODO - This could be changed to only include ACTG which would also remove no calls and 0 
+        if FILTER_INSERTS:
+            this_df = this_df.drop(this_df[this_df["{0}-allele1".format(known_relative)] == "I"].index)
+            this_df = this_df.drop(this_df[this_df["{0}-allele2".format(known_relative)] == 'I'].index)
+        if FILTER_DELETES:
+            this_df = this_df.drop(this_df[this_df["{0}-allele1".format(known_relative)] == 'D'].index)
+            this_df = this_df.drop(this_df[this_df["{0}-allele2".format(known_relative)] == 'D'].index)
+        if FILTER_NO_CALLS:
+            this_df = this_df.drop(this_df[this_df["{0}-allele1".format(known_relative)] == '0'].index)
+            this_df = this_df.drop(this_df[this_df["{0}-allele2".format(known_relative)] == '0'].index)
+
+
+        # Merge this persons DNA dataframe into a common dataframe keying on Chromosome and Position
+        # Only matching chromosome/position pairs will be included in the match
+        # NB: Don't use rsid here because even within ancestry DNA kits, the same rposition may be allocated a different rsid
+        if len(chr_df.index) > 1:
+            if FILTER_MISSING_SNPS:
+                chr_df = pd.merge(chr_df, this_df, how='inner', on=('chromosome', 'position'))
+            else:
+                chr_df = pd.merge(chr_df, this_df, how='outer', on=('chromosome', 'position'))
+
+                # Change NaNs to a character
+            chr_df.fillna(NAN_REPLACEMENT_STRING, inplace=True)
+
+        else:
+            chr_df = this_df
+
+
+    if FILTER_COMPLETELY_MATCHED_SEGMENTS:
+        print("Removing single allele rows")
+        chr_df['allelecount'] = chr_df[name_arry].stack().groupby(level=0).apply(lambda x: x.unique().size)
+        chr_df = chr_df[chr_df['allelecount'] > 1]
+
+    lp_2(str(inspect.stack()[0][2]), "Final DF Length: ",
+         str(len(chr_df)))
+
+    return chr_df
 
 
 CHROMOSOME_TO_RENDER = None
 
+
 def get_match_pair_combinations(
         siblings_to_render,
         extra_match):
-
     all_matches_list = siblings_to_render
 
     match_pair_combinations = [
@@ -119,247 +199,193 @@ def get_match_pair_combinations(
     return match_pair_combinations, all_matches_list
 
 
-def get_match_pixel_dicts_for_siblings_to_render(
-        all_matches_list):
-    """
-    For each match, read the raw file and construct a dictionary with this structure:
-
-        { match_name_1 : { SNP_location_1 : ( tuple of SNP values A and B ),
-                           SNP_location_2 : ( tuple of SNP values A and B ),
-                           SNP_location_3 : ( tuple of SNP values A and B ),
-                         },
-          match_name_1 : { SNP_location_1 : ( tuple of SNP values A and B ),
-                           SNP_location_2 : ( tuple of SNP values A and B ),
-                           SNP_location_4 : ( tuple of SNP values A and B ),
-                         },
-         match_name_3 : { SNP_location_2 : ( tuple of SNP values A and B ),
-                          SNP_location_3 : ( tuple of SNP values A and B ),
-                          SNP_location_4 : ( tuple of SNP values A and B ),
-                         },
-        }
-
-        Keep in mind that different testing companies include a different
-        subset of SNP locations, so each match dict may have different keys.
-    """
-    match_SNP_values_dict = {}
-
-    data_dir_name = DATA_FILE_DIRECTORY
-    data_file_dir = os.path.join(this_dir, "{0}".format(data_dir_name))
-    source_data_file_names = os.listdir(data_file_dir)
-
-    raw_file_names = [f for f in source_data_file_names if 'raw' in f]
-
-    for known_relative in all_matches_list:
-        match_SNP_values_dict[known_relative] = {}
-        try:
-            kr_raw_file_name = [rfn for rfn in raw_file_names
-                                if known_relative in rfn
-                                and rfn.split('.')[ -1] == 'txt'][0]
-
-            lp_2(str(inspect.stack()[0][2]), "kr_raw_file_name",
-                 str(kr_raw_file_name))
-
-        except IndexError as e:
-            lp_2(str(inspect.stack()[0][2]),
-                 "no such file found for {0}".format(known_relative), str(e))
-            sys.exit()
-
-        this_kr_raw_file = os.path.join(data_file_dir, kr_raw_file_name)
-
-        with open(this_kr_raw_file, 'r', encoding='utf-8-sig') as raw_file:
-            raw_reader = csv.reader([row for row in raw_file
-                                     if not row.startswith ('#')
-                                     and not row.startswith ('SNP')
-                                     and not row.startswith('SNP')],
-                                    delimiter='\t')
-            for raw_row in raw_reader:
-
-                if 'Ancestry' in kr_raw_file_name:
-                    if str(raw_row[1]) != str(CHROMOSOME_TO_RENDER):
-                        continue
-                    if raw_row[3] not in ['A', 'C', 'G', 'T']:
-                        pass
-                    raw_row_data = (raw_row[3], raw_row[4])
-
-                else:
-                    if str(raw_row[1]) != str(CHROMOSOME_TO_RENDER):
-                        continue
-                    if raw_row[3][0] not in ['A', 'C', 'G', 'T']:
-                            pass
-                    raw_row_data = (raw_row[3][0], raw_row[3][1])
-
-                match_SNP_values_dict[known_relative][
-                    int(raw_row[2])] = raw_row_data
-
-        pp_3(str(inspect.stack()[0][2]),
-             "MATCH_PIXELS for {0}".format(known_relative),
-             take(10, match_SNP_values_dict[known_relative].items()))
-
-    return match_SNP_values_dict
-
-
-def get_common_keys(
-        match_SNP_values_dict):
-    """
-    Read and compare all matches, and get a list of ONLY those
-    SNP locations ('rsid') that are represented in ALL of the matches.
-    
-    Otherwise you will get blank spots, chromosome images of different lengths,
-     or simply generate errors when trying to compare them.
-    """
-    list_of_match_pixel_dicts = []
-    for kr_key in match_SNP_values_dict.keys():
-
-        list_of_match_pixel_dicts.append(match_SNP_values_dict[kr_key])
-
-    common_SNP_keys = set.intersection(*map(set, list_of_match_pixel_dicts))
-
-    return common_SNP_keys
-
-
-def get_common_key_SNP_dict(
-        common_SNP_keys,
-        match_SNP_values_dict):
-    """
-    Restructure the data dict to look like this, with only SNPs in all files:
-    
-    
-        { SNP_location_1 : { match_name_1 : ( tuple of SNP values A and B ),
-                             match_name_2 : ( tuple of SNP values A and B ),
-                             match_name_3 : ( tuple of SNP values A and B ),
-                           },
-          SNP_location_2  : { match_name_1  : ( tuple of SNP values A and B ),
-                             match_name_2 : ( tuple of SNP values A and B ),
-                             match_name_3 : ( tuple of SNP values A and B ),
-                           },
-         SNP_location_3  : { match_name_1  : ( tuple of SNP values A and B ),
-                             match_name_2 : ( tuple of SNP values A and B ),
-                             match_name_3 : ( tuple of SNP values A and B ),
-                           },
-        }
-    """
-    common_key_SNP_dict = {}
-    for common_SNP_key in common_SNP_keys:
-        common_key_SNP_dict[common_SNP_key] = {}
-        for kr_key in match_SNP_values_dict.keys():
-            common_key_SNP_dict[common_SNP_key][kr_key] = \
-                match_SNP_values_dict[kr_key][common_SNP_key]
-
-    return common_key_SNP_dict
-
-
 def insert_combo_match_type_into_common_key_SNP_dict(
-        common_key_SNP_dict,
+        chr_df,
         match_pair_combinations):
-    """
-    transform the dataset into this structure, one entry for each SNP
-    containing calculated match type (RED-YELLOW-GREEN):
+    # Loop through each match pair and work out the match type and color
+    # and store it in the df
 
-    { SNP_1 : {
-                'position': 289061,
-                'JULIE': ('A', 'G'),
-                'ALLISON': ('A', 'A'),
-                'COLLETTE': ('A', 'G'),
-                'J_A_Match': 'halfMatchSNP',
-                'J_C_Match': 'fullMatchSNP',
-                'A_C_Match': 'halfMatchSNP',
-            },
-     SNP_1 : {
-                'position': 289061,
-                'JULIE': ('G', 'G'),
-                'ALLISON': ('T', 'T'),
-                'COLLETTE': ('G', 'G'),
-                'J_A_Match': 'noMatchSNP',
-                'J_C_Match': 'fullMatchSNP',
-                'A_C_Match': 'noMatchSNP',
-            },
-     SNP_1 : {
-                'position': 289061,
-                'JULIE': ('A', 'G'),
-                'ALLISON': ('A', 'A'),
-                'COLLETTE': ('A', 'G'),
-                'J_A_Match': 'halfMatchSNP',
-                'J_C_Match': 'fullMatchSNP',
-                'A_C_Match': 'halfMatchSNP',
-            },
-    ),
+    for match_pair_combination in match_pair_combinations:
+        lp_2(str(inspect.stack()[0][2]), "Calculating type and colour of match pair",
+             "{0} - {1}".format(match_pair_combination[0], match_pair_combination[1]))
 
-    """
+        match1Allele1 = "{0}-allele1".format(match_pair_combination[0])
+        match1Allele2 = "{0}-allele2".format(match_pair_combination[0])
+        match2Allele1 = "{0}-allele1".format(match_pair_combination[1])
+        match2Allele2 = "{0}-allele2".format(match_pair_combination[1])
 
-    useless_because_everything_is_identical_SNP_list = []
-    """
-    It is helpful to filter out 'noise' segments where all matches have the exact 
-    same values.  These are SNPs where some variation is often found throughout 
-    the human genome, but in this case there are no variants present in any match.
+        # Add a column for this pair 
+        newcol = "{0}-{1}".format(match_pair_combination[0],
+                                  match_pair_combination[1])
 
-    There is no more reason to include these than for the millions of other SNP's 
-    where variants either don't exist, are not commonly found, or are ubiquitious.
-    
-    The file has a setting for this, default is True
-    """
-    for SNP in common_key_SNP_dict:
-        SNP_across_the_board_vals_list = []
-        for sib in siblings_to_render:
-            this_sib_vals = common_key_SNP_dict[SNP][sib][0:2]
-            SNP_across_the_board_vals_list += this_sib_vals
-        if len(set(SNP_across_the_board_vals_list)) == 1:
-            useless_because_everything_is_identical_SNP_list.append(SNP)
+        newColorCol = "{0}-{1}-color".format(match_pair_combination[0],
+                                             match_pair_combination[1])
+        # When multiple conditions match, the first one is used. So include more specific cases first
+        conditions = [
+            # Check for any no calls
+            (chr_df[match1Allele1] == '0') |
+            (chr_df[match1Allele2] == '0') |
+            (chr_df[match2Allele1] == '0') |
+            (chr_df[match2Allele2] == '0'),
 
-    for SNP in common_key_SNP_dict:
+            # Check for any deletes
+            (chr_df[match1Allele1] == 'D') |
+            (chr_df[match1Allele2] == 'D') |
+            (chr_df[match2Allele1] == 'D') |
+            (chr_df[match2Allele2] == 'D'),
 
-        common_key_SNP_dict[SNP]['position'] = SNP
+            # Check for any inserts
+            (chr_df[match1Allele1] == 'I') |
+            (chr_df[match1Allele2] == 'I') |
+            (chr_df[match2Allele1] == 'I') |
+            (chr_df[match2Allele2] == 'I'),
 
-        for match_pair_combination in match_pair_combinations:
-            mp_abbr = "{0}_{1}_Match".format(match_pair_combination[0][:3],
-                                             match_pair_combination[1][:3])
+            # check for any NaNs (missing SNPs in at least one kit)
+            (chr_df[match1Allele1] == NAN_REPLACEMENT_STRING) |
+            (chr_df[match1Allele2] == NAN_REPLACEMENT_STRING) |
+            (chr_df[match2Allele1] == NAN_REPLACEMENT_STRING) |
+            (chr_df[match2Allele2] == NAN_REPLACEMENT_STRING),
 
-            mpA = common_key_SNP_dict[SNP][
-                "{0}".format(match_pair_combination[0])]
-            mpB = common_key_SNP_dict[SNP][
-                "{0}".format(match_pair_combination[1])]
-            mpA_1 = mpA[0]
-            mpA_2 = mpA[1]
-            mpB_1 = mpB[0]
-            mpB_2 = mpB[1]
-            if (mpA_1 == mpB_1 and mpA_2 == mpB_2) or (
-                    mpA_1 == mpB_2 and mpA_2 == mpB_1):
-                match_type = 'fullMatchSNP'
-            elif (mpA_1 == mpB_1 or mpA_2 == mpB_2) or (
-                    mpA_1 == mpB_2 or mpA_2 == mpB_1):
-                match_type = 'halfMatchSNP'
+            # Chek for fully matched SNPs
+            ((chr_df[match1Allele1] == chr_df[match2Allele1]) &
+             (chr_df[match1Allele2] == chr_df[match2Allele2])) |
+            ((chr_df[match1Allele1] == chr_df[match2Allele2]) &
+             (chr_df[match1Allele2] == chr_df[match2Allele1])),
+
+            # Check for no match SNPs
+            (chr_df[match1Allele1] != chr_df[match2Allele1]) &
+            (chr_df[match1Allele2] != chr_df[match2Allele2]) &
+            (chr_df[match1Allele1] != chr_df[match2Allele2]) &
+            (chr_df[match1Allele2] != chr_df[match2Allele1])
+
+        ]
+        # Add the correct match types to the df
+        matchTypeChoices = ['noCallSNP', 'deleteSNP', 'insertSNP', 'missingSNP', 'fullMatchSNP', 'noMatchSNP']
+        chr_df[newcol] = np.select(conditions, matchTypeChoices, default='halfMatchSNP')
+
+        # Add the correct colours to the df
+        colorChoices = [NO_CALL_SNP_COLOR, DELETE_SNP_COLOR, INSERT_SNP_COLOR, MISSING_SNP_COLOR,
+                        FULLY_IDENTICAL_SNP_COLOR, NO_MATCH_SNP_COLOR]
+        chr_df[newColorCol] = np.select(conditions, colorChoices, default=HALF_IDENTICAL_SNP_COLOR)
+
+    return chr_df
+
+
+def calculate_segment_matches(
+        chr_df,
+        match_pair_combinations):
+    # For each matching pair, calculate the strips of green and red (Everything else will be 
+    # yellow or gray)
+    for match_pair_combination in match_pair_combinations:
+        mp_abbr = "{0}-{1}".format(match_pair_combination[0],
+                                   match_pair_combination[1])
+
+        mp_abbr_color = "{0}-{1}-color".format(match_pair_combination[0],
+                                               match_pair_combination[1])
+
+        mp_abbr_seg_color = "{0}-{1}-seg_color".format(match_pair_combination[0],
+                                                       match_pair_combination[1])
+
+        lp_2(str(inspect.stack()[0][2]), "Creating segments for ", str(mp_abbr))
+
+        # Initialise a new column with yellows as default
+        chr_df[mp_abbr_seg_color] = 'yellow'
+
+        # Create a df with just the fields we need so it isn't so large
+        red_df = chr_df[chr_df[mp_abbr_color] == 'red']
+        green_df = chr_df[chr_df[mp_abbr_color] == 'limegreen']
+
+        # Loop through the reds record a start point and stop when the gap to the next one is 
+        # bigger than the RED_GAP
+        start = -1
+        current_position = -1
+        count = 0
+        for index, row in red_df.iterrows():
+            if start == -1:
+                # This entry is the start of a new segment
+                if index < RED_GAP:
+                    start = index
+                    count += 1
+                else:
+                    start = index
+                    count += 1
+                current_position = index
             else:
-                match_type = 'noMatchSNP'
+                # set up some values 
+                if index - current_position > RED_GAP:
+                    # We are at the end of a segment of reds set up to the previous setting
+                    if count >= MIN_REDS:
+                        chr_df = set_segmet_red(start, current_position,
+                                                mp_abbr_seg_color, 'red', chr_df)
+                    start = row.name
+                    current_position = index
+                    count = 0
+                else:
+                    count += 1
+                    current_position = index
+        # If we're at the end then see if we have a last segment to paint
+        if count >= MIN_REDS:
+            chr_df = set_segmet_red(start, current_position,
+                                    mp_abbr_seg_color, 'red', chr_df)
 
-            common_key_SNP_dict[SNP][mp_abbr] = match_type
+        # Loop through the greens record a start point and stop when the gap to the next one is
+        # bigger than the GREEN_GAP
+        start = -1
+        current_position = -1
+        for index, row in green_df.iterrows():
+            if start == -1:
+                # This entry is the start of a new segment
+                if index < GREEN_GAP:
+                    start = index
+                    count += 1
+                else:
+                    start = index
+                    count += 1
+                current_position = index
+            else:
+                # set up some values 
+                if index - current_position > GREEN_GAP:
+                    # We are at the end of a segment of reds set up to the previous setting
+                    if count >= MIN_GREENS:
+                        chr_df = set_segmet_red(start, current_position,
+                                                mp_abbr_seg_color, 'limegreen', chr_df)
+                    start = row.name
+                    current_position = index
+                    count = 0
+                else:
+                    count += 1
+                    current_position = index
 
-    if FILTER_COMPLETELY_MATCHED_SEGMENTS is True:
+        # If we're at the end then see if we have a last segment to paint
+        if count >= MIN_GREENS:
+            chr_df = set_segmet_red(start, current_position,
+                                    mp_abbr_seg_color, 'limegreen', chr_df)
 
-        no_across_the_board_matches_SNP_dict = {
-                key: val for key, val
-                in common_key_SNP_dict.items()
-                if key not in useless_because_everything_is_identical_SNP_list}
+        # We need to decide if we colour the last one
+    return chr_df
 
-        processed_and_sorted_SNP_dict = OrderedDict(
-            sorted(no_across_the_board_matches_SNP_dict.items()))
 
-    else:
-        processed_and_sorted_SNP_dict = OrderedDict(
-            sorted(common_key_SNP_dict.items()))
-
-    pp_3(str(inspect.stack()[0][2]),
-         "processed_and_sorted_SNP_dict",
-         take(10, processed_and_sorted_SNP_dict.items()))
-
-    return processed_and_sorted_SNP_dict
+def set_segmet_red(start_position,
+                   end_position,
+                   mp_abbr_seg_color,
+                   color,
+                   chr_df):
+    # Set all the segments between start and end position to red for this match pair
+#    chr_df.loc[start_position:end_position][mp_abbr_seg_color] = color
+    chr_df.loc[start_position:end_position, mp_abbr_seg_color] = color
+    
+#    dfmi.loc[:, ('one', 'second')]
+    
+    return chr_df
 
 
 def create_comparison_base_strip_image(
         width,
         height):
     comarison_base_strip_image = Image.new(
-            'RGB',
-            (width, height),
-            color=BACKGROUND_COLOR)
+        'RGB',
+        (width, height),
+        color='white')
     return comarison_base_strip_image
 
 
@@ -368,9 +394,9 @@ def create_chrom_whole_page_image(
         height,
         color):
     chromosome_full_page_image = Image.new(
-            'RGB',
-            (width, height),
-            color=color)
+        'RGB',
+        (width, height),
+        color=color)
     return chromosome_full_page_image
 
 
@@ -379,139 +405,195 @@ def draw_single_SNP_line(
         height,
         color):
     single_SNP_line = Image.new(
-            'RGB',
-            (width, height),
-            color=color)
+        'RGB',
+        (width, height),
+        color=color)
     return single_SNP_line
 
 
 def show_match_graphics(
-        processed_and_sorted_SNP_dict_table,
+        chr_df,
         match_pair_combinations):
-    file_lines = len(processed_and_sorted_SNP_dict_table)
+    file_lines = len(chr_df.index)
+
+    title = "Pixel View GEDmatch Chr {0}"
+    file_prefix = ""
+    if FILTER_INSERTS:
+        title += " - no Inserts"
+        file_prefix += "no I"
+    else:
+        title += " - Inserts"
+        file_prefix += "-I"
+
+    if FILTER_DELETES:
+        title += " - no Deletes"
+        file_prefix += "-no D"
+    else:
+        title += " - Deletes"
+        file_prefix += "-D"
+
+    if FILTER_NO_CALLS:
+        title += " - no NoCalls"
+        file_prefix += "-no NoCalls"
+    else:
+        title += " - NoCalls"
+        file_prefix += "-NoCalls"
 
     if FILTER_COMPLETELY_MATCHED_SEGMENTS:
-        title = "Pixel View Raw SNPs for Chr {0} -- filtered".format(
-            CHROMOSOME_TO_RENDER)
+        title += " - no CompletelyMatchedSNPs"
+        file_prefix += "-No CompleteMatched"
     else:
-        title = "Pixel View Raw SNPs for Chr {0} -- unfiltered".format(
-            CHROMOSOME_TO_RENDER)
+        title += " - CompletelyMatchedSNPs"
+        file_prefix += "-CompletelyMatched"
 
     matches_to_show = len(match_pair_combinations)
     chrom_whole_page_image = create_chrom_whole_page_image(
 
-            max((file_lines
-                 + CHROM_PAGE_LEFT_BORDER
-                 + CHROM_PAGE_RIGHT_BORDER),
-                MINIMUM_PAGE_WIDTH),
+        max((file_lines
+             + CHROM_PAGE_LEFT_BORDER
+             + CHROM_PAGE_RIGHT_BORDER),
+            MINIMUM_PAGE_WIDTH),
 
-            (CHROM_PAGE_TOP_BORDER
-            + CHROM_PAGE_BOTTOM_BORDER
-            + CHROM_PAGE_TITLE_SPACE)
-                + (matches_to_show * (
-                    HEIGHT_OF_CHROMOSOME_IMAGE
-                    + SPACE_BETWEEN_MATCHES)),
+        (CHROM_PAGE_TOP_BORDER
+         + CHROM_PAGE_BOTTOM_BORDER
+         + CHROM_PAGE_TITLE_SPACE)
+        + (matches_to_show * 2 * (
+                HEIGHT_OF_CHROMOSOME_IMAGE
+                + SPACE_BETWEEN_MATCHES)),
 
-            BACKGROUND_COLOR)
+        BACKGROUND_COLOR)
 
     lp_3(str(inspect.stack()[0][2]), "matches_to_show", str(matches_to_show))
 
     page_draw = ImageDraw.Draw(chrom_whole_page_image)
     page_draw.text((CHROM_PAGE_LEFT_BORDER, CHROM_PAGE_TOP_BORDER), title,
-            font=ImageFont.truetype(os.path.join(font_library_path, "Arial Bold.ttf"),
-                                    CHROM_TITLE_TEXT_FONT_SIZE), fill='black')
+                   font=ImageFont.truetype("arial.ttf",
+                                           CHROM_PAGE_TEXT_FONT_SIZE), fill='black')
 
     match_shown_number = 0
-    FLAG_TICKMARKS_ARE_PRINTED = False
+    
+    
+    # Create a dataframe with only the fields we need
+    col_list = []
+    for match_pair_combination in match_pair_combinations:
+        mp_abbr = "{0}-{1}".format(match_pair_combination[0],
+                                   match_pair_combination[1])
+
+        mp_abbr_color = "{0}-{1}-color".format(match_pair_combination[0],
+                                               match_pair_combination[1])
+
+        mp_abbr_seg_color = "{0}-{1}-seg_color".format(match_pair_combination[0],
+                                                       match_pair_combination[1])
+        col_list.append(mp_abbr)
+        col_list.append(mp_abbr_color)
+        col_list.append(mp_abbr_seg_color)
+        
+
+    # only keep the col
+    chr_df = chr_df[col_list]
 
     for match_pair_combination in match_pair_combinations:
+        mp_abbr = "{0}-{1}".format(match_pair_combination[0],
+                                   match_pair_combination[1])
 
+        mp_abbr_color = "{0}-{1}-color".format(match_pair_combination[0],
+                                               match_pair_combination[1])
 
-        mp_abbr = "{0}_{1}_Match".format(match_pair_combination[0][:3],
-                                         match_pair_combination[1][:3])
+        mp_abbr_seg_color = "{0}-{1}-seg_color".format(match_pair_combination[0],
+                                                       match_pair_combination[1])
+
+        lp_2(str(inspect.stack()[0][2]), "Creating graphics for ", str(mp_abbr))
+
+        # Create a df with just the fields we need so it isn't so large
+        this_df = chr_df[[mp_abbr_color, mp_abbr_seg_color]]
 
         base_position = 0
 
         comparison_base_strip_image = create_comparison_base_strip_image(
-                file_lines, HEIGHT_OF_CHROMOSOME_IMAGE + SPACE_BETWEEN_MATCHES)
+            file_lines, HEIGHT_OF_CHROMOSOME_IMAGE)
 
-        tickmark_draw = ImageDraw.Draw(comparison_base_strip_image)
+        segment_base_strip_image = create_comparison_base_strip_image(
+            file_lines, HEIGHT_OF_CHROMOSOME_IMAGE)
 
-        for SNP in processed_and_sorted_SNP_dict_table:
+        def chr_df_iter(comparison_base_strip_image,
+                        match_color,
+                        seg_color,
+                        base_position
+                        ):
+            color = match_color
+            seg_color = seg_color
 
-            relevant_match = processed_and_sorted_SNP_dict_table[SNP][mp_abbr]
-            color = 'white'
-            if relevant_match == 'noMatchSNP':
-                color = NO_MATCH_SNP_COLOR
-            elif relevant_match == 'halfMatchSNP':
-                color = HALF_IDENTICAL_SNP_COLOR
-            elif relevant_match == 'fullMatchSNP':
-                color = FULLY_IDENTICAL_SNP_COLOR
-
-            paste_position = (base_position, SPACE_BETWEEN_MATCHES)
+            paste_position = (base_position, 0)
 
             single_pixel_line = draw_single_SNP_line(WIDTH_OF_SNP_LINE,
-                    HEIGHT_OF_CHROMOSOME_IMAGE, color)
+                                                     HEIGHT_OF_CHROMOSOME_IMAGE, color)
+
+            single_pixel_seg_line = draw_single_SNP_line(WIDTH_OF_SNP_LINE,
+                                                         HEIGHT_OF_CHROMOSOME_IMAGE, seg_color)
 
             comparison_base_strip_image.paste(single_pixel_line,
-                    (paste_position))
+                                              (paste_position))
 
-            if FLAG_TICKMARKS_ARE_PRINTED is False:
-                
+            segment_base_strip_image.paste(single_pixel_seg_line,
+                                           (paste_position))
 
-                if base_position % MILESTONE_SPACING == 0:
-                    tickmark_draw.multiline_text(
-                            (base_position,
-                            SPACE_BETWEEN_MATCHES + MILESTONE_VERTICAL_POSITION),
-                            "{:0.1f}\n|".format(SNP / 1000000),
-                            font=ImageFont.truetype(
-                                    os.path.join(font_library_path,
-                                                 "Arial.ttf"),
-                                    MILESTONE_FONT_SIZE), fill='black')
-                    
-                elif base_position % TICKER_SPACING == 0:
-                    tickmark_draw.text(
-                            (base_position,
-                             SPACE_BETWEEN_MATCHES + TICKER_VERTICAL_POSITION),
-                            ".",
-                            font=ImageFont.truetype(
-                                os.path.join(font_library_path, "Arial.ttf"),
-                                TICKMARK_FONT_SIZE), fill='black')
-
+            chr_df.at[base_position, 'color'] = color
             base_position += 1
 
+        this_df.apply(lambda row, base_position=base_position: chr_df_iter(comparison_base_strip_image,
+                                                                           row[mp_abbr_color],
+                                                                           row[mp_abbr_seg_color],
+                                                                           row.name), axis=1)
+
         chrom_whole_page_image.paste(
-                comparison_base_strip_image,
+            comparison_base_strip_image,
 
-                (CHROM_PAGE_LEFT_BORDER,
+            (CHROM_PAGE_LEFT_BORDER,
 
-                (CHROM_PAGE_TOP_BORDER + CHROM_PAGE_TITLE_SPACE
-                    + (match_shown_number * (
-                        HEIGHT_OF_CHROMOSOME_IMAGE
-                        + SPACE_BETWEEN_MATCHES)))))
+             (CHROM_PAGE_TOP_BORDER + CHROM_PAGE_TITLE_SPACE
+              + (2 * match_shown_number * (
+                             HEIGHT_OF_CHROMOSOME_IMAGE
+                             + SPACE_BETWEEN_MATCHES)))))
+
+        chrom_whole_page_image.paste(
+            segment_base_strip_image,
+
+            (CHROM_PAGE_LEFT_BORDER,
+
+             (CHROM_PAGE_TOP_BORDER + CHROM_PAGE_TITLE_SPACE
+              + ((2 * match_shown_number + 1) * (
+                             HEIGHT_OF_CHROMOSOME_IMAGE
+                             + SPACE_BETWEEN_MATCHES))
+              - SPACE_BETWEEN_MATCHES)))
 
         draw = ImageDraw.Draw(chrom_whole_page_image)
 
-        arial = ImageFont.truetype(
-                os.path.join(font_library_path,
-                             "Arial Bold.ttf"),
-                CHROM_MATCH_TEXT_FONT_SIZE)
+        arial = ImageFont.truetype("arial.ttf", CHROM_PAGE_TEXT_FONT_SIZE)
 
         draw.text((
-                CHROM_PAGE_TEXT_BORDER,
+            CHROM_PAGE_TEXT_BORDER,
 
-                (CHROM_PAGE_TOP_BORDER
-                    + CHROM_PAGE_TITLE_SPACE
-                    + (match_shown_number
-                       * (HEIGHT_OF_CHROMOSOME_IMAGE
-                            + SPACE_BETWEEN_MATCHES)))),
-
-                mp_abbr, font=arial, fill='black')
+            (CHROM_PAGE_TOP_BORDER
+              + CHROM_PAGE_TITLE_SPACE
+                + (2 * match_shown_number
+                  * (HEIGHT_OF_CHROMOSOME_IMAGE
+                   + SPACE_BETWEEN_MATCHES)))),            
+            mp_abbr, font=arial, fill='black')
 
         match_shown_number += 1
-        FLAG_TICKMARKS_ARE_PRINTED = True
 
-    chrom_whole_page_image.show()
+    this_dir = os.path.dirname(os.path.realpath('__file__'))
+    image_file_dir = os.path.join(this_dir, "{0}".format(IMAGE_FILE_DIRECTORY))
+
+    image_file = "{0}\\pixel_chr_{3}_{2}_chr_{1}.png".format(image_file_dir,
+                                                  CHROMOSOME_TO_RENDER,
+                                                  file_prefix,
+                                                  '-'.join(siblings_to_render))
+    print("Saving image")
+    chrom_whole_page_image.save(image_file)
+
+    lp_2(str(inspect.stack()[0][2]), "Finished graphics for chromosome: ", str(CHROMOSOME_TO_RENDER))
+    print('Image saved as:{0}'.format(image_file))
 
 
 if __name__ == '__main__':
@@ -533,31 +615,37 @@ if __name__ == '__main__':
         else:
             get_valid_chromosome_number()
 
-    get_valid_chromosome_number()
 
-    match_pair_combinations, all_matches_list \
-        = get_match_pair_combinations(
-            siblings_to_render,
-            extra_match)
+    if SINGLE_CHROMOSOME:
+        get_valid_chromosome_number()
+        start_chr = CHROMOSOME_TO_RENDER
+        end_chr = CHROMOSOME_TO_RENDER + 1
+        lp_2(str(inspect.stack()[0][2]), "Option for single chromosome selected. Chromosome: ", str(CHROMOSOME_TO_RENDER))
 
-    match_SNP_values_dict = \
-        get_match_pixel_dicts_for_siblings_to_render(
-            all_matches_list)
+    else:
+        start_chr = 1
+        end_chr = 24
+        lp_2(str(inspect.stack()[0][2]), "Option for all chromosomes selected.", '')
 
-    common_SNP_keys = \
-        get_common_keys(
-                match_SNP_values_dict)
+    for CHROMOSOME_TO_RENDER in range(start_chr, end_chr):
+        lp_2(str(inspect.stack()[0][2]), "Processing chromosome: ", str(CHROMOSOME_TO_RENDER))
 
-    common_key_SNP_dict = \
-        get_common_key_SNP_dict(
-                common_SNP_keys,
-                match_SNP_values_dict)
+        match_pair_combinations, all_matches_list = get_match_pair_combinations(siblings_to_render, extra_match)
 
-    processed_and_sorted_SNP_dict_table = \
-        insert_combo_match_type_into_common_key_SNP_dict(
-            common_key_SNP_dict,
+        chr_df = None
+        chr_df = get_chromsome_dataframe_for_matches(all_matches_list)
+
+        # Reset the index so it goes from 0 on
+        chr_df.reset_index(inplace=True, drop=True)
+
+        chr_df = insert_combo_match_type_into_common_key_SNP_dict(
+            chr_df,
             match_pair_combinations)
 
-    show_match_graphics(
-            processed_and_sorted_SNP_dict_table,
+        chr_df = calculate_segment_matches(
+            chr_df,
+            match_pair_combinations)
+
+        show_match_graphics(
+            chr_df,
             match_pair_combinations)

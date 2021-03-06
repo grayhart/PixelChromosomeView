@@ -3,3 +3,6 @@
 *.DS_Store
 *.idea
 *.iml
+images/
+raw_files/
+__pycache__/
