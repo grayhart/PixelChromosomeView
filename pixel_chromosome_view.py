@@ -182,12 +182,13 @@ CHROMOSOME_TO_RENDER = None
 def get_match_pair_combinations(
         siblings_to_render,
         extra_match):
+    siblings_to_render = list(dict.fromkeys(siblings_to_render))
     all_matches_list = siblings_to_render
-
+    
     match_pair_combinations = [
         (siblings_to_render[m[0]], siblings_to_render[m[1]]) for m in
         list(combinations(range(len(siblings_to_render)), 2))]
-    if extra_match:
+    if extra_match and extra_match not in siblings_to_render:
         for sib in siblings_to_render:
             match_pair_combinations.append((sib, extra_match))
 
@@ -627,10 +628,11 @@ if __name__ == '__main__':
         end_chr = 24
         lp_2(str(inspect.stack()[0][2]), "Option for all chromosomes selected.", '')
 
+    match_pair_combinations, all_matches_list = get_match_pair_combinations(siblings_to_render, extra_match)
+ 
     for CHROMOSOME_TO_RENDER in range(start_chr, end_chr):
         lp_2(str(inspect.stack()[0][2]), "Processing chromosome: ", str(CHROMOSOME_TO_RENDER))
 
-        match_pair_combinations, all_matches_list = get_match_pair_combinations(siblings_to_render, extra_match)
 
         chr_df = None
         chr_df = get_chromsome_dataframe_for_matches(all_matches_list)
