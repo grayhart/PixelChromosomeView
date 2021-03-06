@@ -290,11 +290,11 @@ def calculate_segment_matches(
         lp_2(str(inspect.stack()[0][2]), "Creating segments for ", str(mp_abbr))
 
         # Initialise a new column with yellows as default
-        chr_df[mp_abbr_seg_color] = 'yellow'
+        chr_df[mp_abbr_seg_color] = HALF_MATCH_SEGMENT_COLOR
 
         # Create a df with just the fields we need so it isn't so large
-        red_df = chr_df[chr_df[mp_abbr_color] == 'red']
-        green_df = chr_df[chr_df[mp_abbr_color] == 'limegreen']
+        red_df = chr_df[chr_df[mp_abbr_color] == NO_MATCH_SEGMENT_COLOR]
+        green_df = chr_df[chr_df[mp_abbr_color] == FULL_MATCH_SEGMENT_COLOR]
 
         # Loop through the reds record a start point and stop when the gap to the next one is 
         # bigger than the RED_GAP
@@ -317,7 +317,7 @@ def calculate_segment_matches(
                     # We are at the end of a segment of reds set up to the previous setting
                     if count >= MIN_REDS:
                         chr_df = set_segmet_red(start, current_position,
-                                                mp_abbr_seg_color, 'red', chr_df)
+                                                mp_abbr_seg_color, NO_MATCH_SEGMENT_COLOR, chr_df)
                     start = row.name
                     current_position = index
                     count = 0
@@ -327,7 +327,7 @@ def calculate_segment_matches(
         # If we're at the end then see if we have a last segment to paint
         if count >= MIN_REDS:
             chr_df = set_segmet_red(start, current_position,
-                                    mp_abbr_seg_color, 'red', chr_df)
+                                    mp_abbr_seg_color, NO_MATCH_SEGMENT_COLOR, chr_df)
 
         # Loop through the greens record a start point and stop when the gap to the next one is
         # bigger than the GREEN_GAP
@@ -349,7 +349,7 @@ def calculate_segment_matches(
                     # We are at the end of a segment of reds set up to the previous setting
                     if count >= MIN_GREENS:
                         chr_df = set_segmet_red(start, current_position,
-                                                mp_abbr_seg_color, 'limegreen', chr_df)
+                                                mp_abbr_seg_color, FULL_MATCH_SEGMENT_COLOR, chr_df)
                     start = row.name
                     current_position = index
                     count = 0
@@ -360,7 +360,7 @@ def calculate_segment_matches(
         # If we're at the end then see if we have a last segment to paint
         if count >= MIN_GREENS:
             chr_df = set_segmet_red(start, current_position,
-                                    mp_abbr_seg_color, 'limegreen', chr_df)
+                                    mp_abbr_seg_color, FULL_MATCH_SEGMENT_COLOR, chr_df)
 
         # We need to decide if we colour the last one
     return chr_df
@@ -586,10 +586,14 @@ def show_match_graphics(
     this_dir = os.path.dirname(os.path.realpath('__file__'))
     image_file_dir = os.path.join(this_dir, "{0}".format(IMAGE_FILE_DIRECTORY))
 
+    sibling_array = siblings_to_render
+    if extra_match != "":
+        sibling_array.append(extra_match)
+        
     image_file = "{0}\\pixel_chr_{3}_{2}_chr_{1}.png".format(image_file_dir,
                                                   CHROMOSOME_TO_RENDER,
                                                   file_prefix,
-                                                  '-'.join(siblings_to_render))
+                                                  '-'.join(sibling_array))
     print("Saving image")
     chrom_whole_page_image.save(image_file)
 
