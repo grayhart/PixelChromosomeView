@@ -6,7 +6,7 @@ There are TWO MANDATORY settings:
 
 DATA_FILE_DIRECTORY = 'raw_files'
 IMAGE_FILE_DIRECTORY = 'images'
-siblings_to_render = ['KEN', 'ALAN', 'BRIAN']
+siblings_to_render = ['KEN', 'ALAN', 'BRIAN','ADRIAN']
 
 # optionally you can compare the siblings with one additional relative
 extra_match = 'BERYL'
