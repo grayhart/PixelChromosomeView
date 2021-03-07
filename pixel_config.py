@@ -30,6 +30,10 @@ copy all relevant raw dna files into the directory your specify
 """
 SINGLE_CHROMOSOME = True
 
+INCLUDE_RECOMBINATION_LINES=True
+RECOMBINATION_LINE_WIDTH = 20
+RECOMBINATION_LINE_COLOR = 'black'
+
 # Filter out any entries with 'I', 'D' or '0' ()
 FILTER_INSERTS = True
 FILTER_DELETES = True

@@ -277,6 +277,7 @@ def calculate_segment_matches(
         match_pair_combinations):
     # For each matching pair, calculate the strips of green and red (Everything else will be 
     # yellow or gray)
+    segment_mark = []
     for match_pair_combination in match_pair_combinations:
         mp_abbr = "{0}-{1}".format(match_pair_combination[0],
                                    match_pair_combination[1])
@@ -316,6 +317,8 @@ def calculate_segment_matches(
                 if index - current_position > RED_GAP:
                     # We are at the end of a segment of reds set up to the previous setting
                     if count >= MIN_REDS:
+                        segment_mark.append(start)
+                        segment_mark.append(current_position)
                         chr_df = set_segmet_red(start, current_position,
                                                 mp_abbr_seg_color, NO_MATCH_SEGMENT_COLOR, chr_df)
                     start = row.name
@@ -326,6 +329,8 @@ def calculate_segment_matches(
                     current_position = index
         # If we're at the end then see if we have a last segment to paint
         if count >= MIN_REDS:
+            segment_mark.append(start)
+            segment_mark.append(current_position)
             chr_df = set_segmet_red(start, current_position,
                                     mp_abbr_seg_color, NO_MATCH_SEGMENT_COLOR, chr_df)
 
@@ -348,6 +353,8 @@ def calculate_segment_matches(
                 if index - current_position > GREEN_GAP:
                     # We are at the end of a segment of reds set up to the previous setting
                     if count >= MIN_GREENS:
+                        segment_mark.append(start)
+                        segment_mark.append(current_position)
                         chr_df = set_segmet_red(start, current_position,
                                                 mp_abbr_seg_color, FULL_MATCH_SEGMENT_COLOR, chr_df)
                     start = row.name
@@ -359,11 +366,13 @@ def calculate_segment_matches(
 
         # If we're at the end then see if we have a last segment to paint
         if count >= MIN_GREENS:
+            segment_mark.append(start)
+            segment_mark.append(current_position)
             chr_df = set_segmet_red(start, current_position,
                                     mp_abbr_seg_color, FULL_MATCH_SEGMENT_COLOR, chr_df)
 
         # We need to decide if we colour the last one
-    return chr_df
+    return chr_df, segment_mark
 
 
 def set_segmet_red(start_position,
@@ -412,9 +421,11 @@ def draw_single_SNP_line(
     return single_SNP_line
 
 
+
 def show_match_graphics(
         chr_df,
-        match_pair_combinations):
+        match_pair_combinations,
+        segment_marks):
     file_lines = len(chr_df.index)
 
     title = "Pixel View GEDmatch Chr {0}"
@@ -583,6 +594,23 @@ def show_match_graphics(
 
         match_shown_number += 1
 
+    if (INCLUDE_RECOMBINATION_LINES):
+        # Draw the recombination lines
+        lineheight = 2 * len(match_pair_combinations) * (HEIGHT_OF_CHROMOSOME_IMAGE + 
+                   SPACE_BETWEEN_MATCHES) - HEIGHT_OF_CHROMOSOME_IMAGE
+                
+        for linepoint in segment_marks:
+            # Get a line of the right size 
+            # print("Pasting a line at {0}".format(linepoint))
+            thisline = draw_single_SNP_line(
+                                            RECOMBINATION_LINE_WIDTH,
+                                            lineheight,
+                                            RECOMBINATION_LINE_COLOR)
+            # Poition the line 
+            chrom_whole_page_image.paste(thisline, (CHROM_PAGE_LEFT_BORDER+linepoint,
+                                                    CHROM_PAGE_TOP_BORDER+CHROM_PAGE_TITLE_SPACE))
+        
+    
     this_dir = os.path.dirname(os.path.realpath('__file__'))
     image_file_dir = os.path.join(this_dir, "{0}".format(IMAGE_FILE_DIRECTORY))
 
@@ -648,10 +676,11 @@ if __name__ == '__main__':
             chr_df,
             match_pair_combinations)
 
-        chr_df = calculate_segment_matches(
+        chr_df, segment_marks = calculate_segment_matches(
             chr_df,
             match_pair_combinations)
 
         show_match_graphics(
             chr_df,
-            match_pair_combinations)
+            match_pair_combinations,
+            segment_marks)
